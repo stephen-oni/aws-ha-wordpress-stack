@@ -17,7 +17,7 @@ This architecture is designed for resilience:
 ### 1. Initialization
 Clone the repository to your local machine and prepare the environment:
 ```bash
-git clone [https://github.com/stephen-oni/VPC-EC2-ASG-RDS.git](https://github.com/stephen-oni/VPC-EC2-ASG-RDS.git)
+git clone https://github.com/stephen-oni/VPC-EC2-ASG-RDS.git
 cd VPC-EC2-ASG-RDS
 chmod +x scripts/*.sh
 ```
