@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Universal Auto Scaling WordPress: High-Availability Fleet + RDS'
+
+# --- STEP 1: PARAMETERS (Security & Customization) ---
+Parameters:
+  DBName:
+    Type: String
+    Default: wordpressdb
+  DBUser:
+    Type: String
+    Default: admin
+  DBPassword:
+    Type: String
+    NoEcho: true # Hides password in the console
+  
+  # Automatically finds the newest Amazon Linux 2023 AMI in ANY region
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+
+Resources:
+  # --- STEP 2: THE NETWORK (Multi-AZ VPC) ---
+  MyVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: PracticeVPC}]
+
+  MyIGW: { Type: 'AWS::EC2::InternetGateway' }
+
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyIGW
+
+  # TWO Public Subnets (For the Web Fleet)
+  MyPublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  MyPublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  # TWO Private Subnets (For the Database)
+  MyPrivateDataSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.20.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  MyPrivateDataSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.21.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  MyRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref MyVPC
+
+  DefaultRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref MyRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyIGW
+
+  # Associate BOTH public subnets with the internet
+  Assoc1: { Type: 'AWS::EC2::SubnetRouteTableAssociation', Properties: { SubnetId: !Ref MyPublicSubnet1, RouteTableId: !Ref MyRouteTable } }
+  Assoc2: { Type: 'AWS::EC2::SubnetRouteTableAssociation', Properties: { SubnetId: !Ref MyPublicSubnet2, RouteTableId: !Ref MyRouteTable } }
+
+  # --- STEP 3: SECURITY GROUPS ---
+  MyInstanceSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow HTTP'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  MyDatabaseSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow MySQL from Web Servers'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref MyInstanceSG
+
+  # --- STEP 4: IAM ROLE ---
+  MyInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: [ec2.amazonaws.com]}
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+
+  MyInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles: [!Ref MyInstanceRole]
+
+  # --- STEP 5: THE MANAGED DATABASE (RDS) ---
+  MyDBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: 'Subnets for RDS'
+      SubnetIds: [!Ref MyPrivateDataSubnet1, !Ref MyPrivateDataSubnet2]
+
+  MyDatabase:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      MultiAZ: true
+      DBName: !Ref DBName
+      Engine: MySQL
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      VPCSecurityGroups: [!Ref MyDatabaseSG]
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      PubliclyAccessible: false
+
+  # --- STEP 6: THE AUTO SCALING FLEET ---
+  # Launch Template defines WHAT to launch
+  MyLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t3.micro
+        ImageId: !Ref LatestAmiId # Universal AMI lookup
+        SecurityGroupIds: [!Ref MyInstanceSG]
+        IamInstanceProfile: { Name: !Ref MyInstanceProfile }
+
+  # ASG defines WHERE and HOW MANY to launch
+  MyASG:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      MinSize: '2'
+      MaxSize: '4'
+      DesiredCapacity: '2'
+      # Spreading instances across BOTH public subnets for High Availability
+      VPCZoneIdentifier: [!Ref MyPublicSubnet1, !Ref MyPublicSubnet2]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate
+        Version: !GetAtt MyLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: App
+          Value: WordPress
+          PropagateAtLaunch: true 
+
+  # --- STEP 7: AUTOMATION (SSM Association) ---
+  WordPressAutomation:
+    Type: 'AWS::SSM::Association'
+    Properties:
+      Name: 'AWS-RunShellScript'
+      Targets:
+        - Key: 'tag:App'
+          Values: ['WordPress']
+      Parameters:
+        commands:
+          - !Sub |
+            dnf update -y
+            dnf install -y httpd php php-mysqlnd wget
+            systemctl start httpd
+            systemctl enable httpd
+            cd /var/www/html
+            wget https://wordpress.org/latest.tar.gz
+            tar -xzf latest.tar.gz
+            cp -r wordpress/* .
+            cp wp-config-sample.php wp-config.php
+            # Automated connection using Parameters and RDS Endpoint
+            sed -i "s/database_name_here/${DBName}/" wp-config.php
+            sed -i "s/username_here/${DBUser}/" wp-config.php
+            sed -i "s/password_here/${DBPassword}/" wp-config.php
+            sed -i "s/localhost/${MyDatabase.Endpoint.Address}/" wp-config.php
+            chown -R apache:apache /var/www/html
+            systemctl restart httpd
+
+Outputs:
+  DatabaseEndpoint:
+    Value: !GetAtt MyDatabase.Endpoint.Address
+  Instructions:
+    Value: "Wait 5 mins, then find the Public IP of any ASG instance in the EC2 Console to view your site."

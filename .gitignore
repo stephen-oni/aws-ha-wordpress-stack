@@ -1,0 +1,13 @@
+# Local Environment & Secrets
+.env
+*.pem
+*.key
+*.secret
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Dependencies/Builds
+__pycache__/
+.terraform/
