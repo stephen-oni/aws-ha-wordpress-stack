@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Universal Auto Scaling WordPress: High-Availability Fleet + RDS'
 
-# --- STEP 1: PARAMETERS (Security & Customization) ---
+# Security & Customization
 Parameters:
   DBName:
     Type: String
@@ -11,15 +11,15 @@ Parameters:
     Default: admin
   DBPassword:
     Type: String
-    NoEcho: true # Hides password in the console
+    NoEcho: true 
   
-  # Automatically finds the newest Amazon Linux 2023 AMI in ANY region
+  # find the newest Amazon Linux 2023 AMI in ANY region automatically.
   LatestAmiId:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 
 Resources:
-  # --- STEP 2: THE NETWORK (Multi-AZ VPC) ---
+  
   MyVPC:
     Type: 'AWS::EC2::VPC'
     Properties:
@@ -35,7 +35,7 @@ Resources:
       VpcId: !Ref MyVPC
       InternetGatewayId: !Ref MyIGW
 
-  # TWO Public Subnets (For the Web Fleet)
+  # TWO Public Subnets
   MyPublicSubnet1:
     Type: 'AWS::EC2::Subnet'
     Properties:
@@ -52,7 +52,7 @@ Resources:
       AvailabilityZone: !Select [1, !GetAZs ""]
       MapPublicIpOnLaunch: true
 
-  # TWO Private Subnets (For the Database)
+  # TWO Private Subnets
   MyPrivateDataSubnet1:
     Type: 'AWS::EC2::Subnet'
     Properties:
@@ -80,11 +80,11 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref MyIGW
 
-  # Associate BOTH public subnets with the internet
+  # Associating both public subnets with the internet
   Assoc1: { Type: 'AWS::EC2::SubnetRouteTableAssociation', Properties: { SubnetId: !Ref MyPublicSubnet1, RouteTableId: !Ref MyRouteTable } }
   Assoc2: { Type: 'AWS::EC2::SubnetRouteTableAssociation', Properties: { SubnetId: !Ref MyPublicSubnet2, RouteTableId: !Ref MyRouteTable } }
 
-  # --- STEP 3: SECURITY GROUPS ---
+  # SECURITY GROUPS
   MyInstanceSG:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -107,7 +107,7 @@ Resources:
           ToPort: 3306
           SourceSecurityGroupId: !Ref MyInstanceSG
 
-  # --- STEP 4: IAM ROLE ---
+  # ROLE
   MyInstanceRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -125,7 +125,7 @@ Resources:
     Properties:
       Roles: [!Ref MyInstanceRole]
 
-  # --- STEP 5: THE MANAGED DATABASE (RDS) ---
+  # RDS
   MyDBSubnetGroup:
     Type: 'AWS::RDS::DBSubnetGroup'
     Properties:
@@ -146,8 +146,7 @@ Resources:
       MasterUserPassword: !Ref DBPassword
       PubliclyAccessible: false
 
-  # --- STEP 6: THE AUTO SCALING FLEET ---
-  # Launch Template defines WHAT to launch
+  # ASG
   MyLaunchTemplate:
     Type: 'AWS::EC2::LaunchTemplate'
     Properties:
@@ -157,14 +156,14 @@ Resources:
         SecurityGroupIds: [!Ref MyInstanceSG]
         IamInstanceProfile: { Name: !Ref MyInstanceProfile }
 
-  # ASG defines WHERE and HOW MANY to launch
   MyASG:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
     Properties:
       MinSize: '2'
       MaxSize: '4'
       DesiredCapacity: '2'
-      # Spreading instances across BOTH public subnets for High Availability
+
+      
       VPCZoneIdentifier: [!Ref MyPublicSubnet1, !Ref MyPublicSubnet2]
       LaunchTemplate:
         LaunchTemplateId: !Ref MyLaunchTemplate
@@ -174,7 +173,7 @@ Resources:
           Value: WordPress
           PropagateAtLaunch: true 
 
-  # --- STEP 7: AUTOMATION (SSM Association) ---
+  # AUTOMATION using SSM Association
   WordPressAutomation:
     Type: 'AWS::SSM::Association'
     Properties:
@@ -194,7 +193,6 @@ Resources:
             tar -xzf latest.tar.gz
             cp -r wordpress/* .
             cp wp-config-sample.php wp-config.php
-            # Automated connection using Parameters and RDS Endpoint
             sed -i "s/database_name_here/${DBName}/" wp-config.php
             sed -i "s/username_here/${DBUser}/" wp-config.php
             sed -i "s/password_here/${DBPassword}/" wp-config.php
