@@ -40,7 +40,7 @@ Pull the active Public IP directly to your terminal by running:
 ```Bash
 aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "Reservations[*].Instances[*].PublicIpAddress" --output text
 ```
-Copy the outputted IP and paste http://<YOUR_PUBLIC_IP> into your browser.
+Copy the outputted IP and paste `http://<YOUR_PUBLIC_IP>` into your browser.
 
 Method B: Via AWS Management Console
 
